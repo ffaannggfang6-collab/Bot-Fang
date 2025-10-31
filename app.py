@@ -3,9 +3,10 @@ import os
 from flask import Flask, request, abort, send_file
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage, ImageSendMessage, UnsendEvent
+from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage, ImageSendMessage, UnsendEvent, StickerMessage
 from datetime import datetime
 import pytz
+import re
 
 # Environment Variables
 CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
@@ -23,7 +24,16 @@ handler = WebhookHandler(CHANNEL_SECRET)
 message_memory = {}
 chat_counter = {}
 
-# รับข้อความ Text + สรุปบิล/รีเซ็ตเมื่อเพิ่มประกาศ
+# ฟังก์ชันตรวจสอบว่าข้อความมีเฉพาะตัวอักษร/ตัวเลข
+def is_valid_text(text):
+    # ถ้ามี @mention หรือเป็นอิโมจิล้วนๆ → ไม่นับ
+    if "@" in text:
+        return False
+    # เช็คว่ามีตัวอักษรหรือตัวเลขปกติ
+    clean_text = re.sub(r'[^\w\s]', '', text)
+    return bool(clean_text.strip())
+
+# รับข้อความ Text
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
     user_id = event.source.user_id
@@ -34,23 +44,23 @@ def handle_text_message(event):
     chat_counter.setdefault(group_id, {"text":0,"image":0})
 
     # 📢 สรุปบิล
-    if text == "📢":
+    if "📢" in text:
         counts = chat_counter.get(group_id, {"text":0,"image":0})
         total = counts["text"] + counts["image"]
         reply_text = f"✨สรุป จำนวนบิล✨\n\nมีทั้งหมด {total} 📨"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # ทุกข้อความอื่นถือเป็น "เพิ่มประกาศ" → รีเซ็ตบิลใหม่ + เริ่มนับข้อความนี้เป็นบิลแรก
-    chat_counter[group_id] = {"text":1, "image":0}
-
-    message_memory[message_id] = {
-        "type": "text",
-        "user_id": user_id,
-        "text": text,
-        "timestamp": datetime.now(pytz.timezone('Asia/Bangkok')),
-        "group_id": group_id
-    }
+    # ถ้าเป็นข้อความประกาศ/ข้อความปกติที่ valid → รีเซ็ตบิลใหม่ + เริ่มนับข้อความนี้เป็นบิลแรก
+    if is_valid_text(text):
+        chat_counter[group_id] = {"text":1, "image":0}
+        message_memory[message_id] = {
+            "type": "text",
+            "user_id": user_id,
+            "text": text,
+            "timestamp": datetime.now(pytz.timezone('Asia/Bangkok')),
+            "group_id": group_id
+        }
 
 # รับภาพ Image
 @handler.add(MessageEvent, message=ImageMessage)
@@ -75,6 +85,11 @@ def handle_image_message(event):
         "timestamp": datetime.now(pytz.timezone('Asia/Bangkok')),
         "group_id": group_id
     }
+
+# ข้ามสติกเกอร์ ไม่นับ
+@handler.add(MessageEvent, message=StickerMessage)
+def handle_sticker_message(event):
+    pass  # ไม่นับสติกเกอร์
 
 # Serve ภาพ
 @app.route('/images/<message_id>.jpg')
