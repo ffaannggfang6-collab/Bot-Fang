@@ -77,7 +77,7 @@ def handle_unsend(event):
                       f"• ข้อความ : \"{data['text']}\"")
         line_bot_api.push_message(group_id, TextSendMessage(text=reply_text))
     elif data["type"] == "image":
-        image_url = f"https://your-server-url/images/{message_id}.jpg"
+        image_url = f"https://bot-fang-1-ckqg.onrender.com/images/{message_id}.jpg"
         reply_text = (f"[ ข้อความที่ถูกยกเลิก ]\n"
                       f"• ผู้ส่ง : {display_name}\n"
                       f"• เวลาส่ง : {timestamp}\n"
