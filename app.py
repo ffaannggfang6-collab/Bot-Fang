@@ -43,8 +43,8 @@ def handle_text_message(event):
 
     chat_counter.setdefault(group_id, {"text":0,"image":0})
 
-    # 📢 สรุปบิล
-    if "📢" in text:
+    # 🆗 สรุปบิล
+    if "🆗" in text:
         counts = chat_counter.get(group_id, {"text":0,"image":0})
         total = counts["text"] + counts["image"]
         reply_text = f"✨สรุป จำนวนบิล✨\n\nมีทั้งหมด {total} 📨"
