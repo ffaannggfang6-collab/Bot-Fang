@@ -7,7 +7,7 @@ from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMess
 from datetime import datetime
 import pytz
 
-# อ่าน Environment Variables
+# Environment Variables
 CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET")
 APP_URL = os.environ.get("APP_URL")  # URL ของ Render เช่น https://bot-fang-1-ckqg.onrender.com
@@ -23,7 +23,7 @@ handler = WebhookHandler(CHANNEL_SECRET)
 message_memory = {}
 chat_counter = {}
 
-# รับข้อความ Text
+# รับข้อความ Text + สรุปบิล/รีเซ็ตเมื่อเพิ่มประกาศ
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
     user_id = event.source.user_id
@@ -32,7 +32,17 @@ def handle_text_message(event):
     group_id = getattr(event.source, 'group_id', user_id)
 
     chat_counter.setdefault(group_id, {"text":0,"image":0})
-    chat_counter[group_id]["text"] += 1
+
+    # 📢 สรุปบิล
+    if text == "📢":
+        counts = chat_counter.get(group_id, {"text":0,"image":0})
+        total = counts["text"] + counts["image"]
+        reply_text = f"✨สรุป จำนวนบิล✨\n\nมีทั้งหมด {total} 📨"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+        return
+
+    # ทุกข้อความอื่นถือเป็น "เพิ่มประกาศ" → รีเซ็ตบิลใหม่ + เริ่มนับข้อความนี้เป็นบิลแรก
+    chat_counter[group_id] = {"text":1, "image":0}
 
     message_memory[message_id] = {
         "type": "text",
@@ -50,9 +60,8 @@ def handle_image_message(event):
     group_id = getattr(event.source, 'group_id', user_id)
 
     chat_counter.setdefault(group_id, {"text":0,"image":0})
-    chat_counter[group_id]["image"] += 1
+    chat_counter[group_id]["image"] += 1  # นับภาพปกติ
 
-    # บันทึกภาพชั่วคราว
     image_content = line_bot_api.get_message_content(message_id)
     image_path = f"temp_{message_id}.jpg"
     with open(image_path, 'wb') as f:
@@ -119,19 +128,6 @@ def handle_unsend(event):
         ])
 
     del message_memory[message_id]
-
-# เริ่มนับบิลใหม่
-@app.route('/reset/<group_id>')
-def reset_counter(group_id):
-    chat_counter[group_id] = {"text":0,"image":0}
-    return f"✅ เริ่มนับบิลใหม่เรียบร้อยสำหรับกลุ่ม {group_id}"
-
-# เรียกผลรวมบิล
-@app.route('/count/<group_id>')
-def count_messages(group_id):
-    counts = chat_counter.get(group_id, {"text":0,"image":0})
-    total = counts["text"] + counts["image"]
-    return f"✨สรุป จำนวนบิล✨\n\nมีทั้งหมด {total} 📨"
 
 # LINE Webhook
 @app.route("/callback", methods=['POST'])
