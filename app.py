@@ -1,59 +1,63 @@
 
-import os
-from flask import Flask, request, abort, send_file
+from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage, ImageSendMessage, UnsendEvent, StickerMessage
-from datetime import datetime
+from linebot.models import TextSendMessage, MessageEvent, TextMessage, ImageMessage, UnsendMessageEvent
 import pytz
-import re
-
-# Environment Variables
-CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
-CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET")
-APP_URL = os.environ.get("APP_URL")  # URL ของ Render เช่น https://bot-fang-1-ckqg.onrender.com
-PORT = int(os.environ.get("PORT", 10000))
-
-if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET or not APP_URL:
-    raise ValueError("โปรดตั้งค่า Environment Variables: CHANNEL_ACCESS_TOKEN, CHANNEL_SECRET, APP_URL")
+from datetime import datetime
 
 app = Flask(__name__)
+
+# LINE Bot Setup
+CHANNEL_ACCESS_TOKEN = "YOUR_CHANNEL_ACCESS_TOKEN"
+CHANNEL_SECRET = "YOUR_CHANNEL_SECRET"
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-message_memory = {}
-chat_counter = {}
+# ตัวเก็บบิล
+chat_counter = {}      # {group_id: {"text": n, "image": n}}
+message_memory = {}    # เก็บข้อความ + ภาพ
 
-# ฟังก์ชันตรวจสอบว่าข้อความมีเฉพาะตัวอักษร/ตัวเลข
 def is_valid_text(text):
-    # ถ้ามี @mention หรือเป็นอิโมจิล้วนๆ → ไม่นับ
-    if "@" in text:
-        return False
-    # เช็คว่ามีตัวอักษรหรือตัวเลขปกติ
-    clean_text = re.sub(r'[^\w\s]', '', text)
-    return bool(clean_text.strip())
+    return text.strip() != "" and text != "📢"
 
-# รับข้อความ Text
+# Webhook endpoint
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers['X-Line-Signature']
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except Exception as e:
+        print("Error:", e)
+    return 'OK'
+
+# รับข้อความข้อความ
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
-    user_id = event.source.user_id
     text = event.message.text
-    message_id = event.message.id
+    user_id = event.source.user_id
     group_id = getattr(event.source, 'group_id', user_id)
+    message_id = event.message.id
 
-    chat_counter.setdefault(group_id, {"text":0,"image":0})
-
-    # 🆗 สรุปบิล
-    if "🆗" in text:
+    # 📢 สรุปบิล + รีเซ็ตเฉพาะหลังสรุป
+    if "📢" in text or "สรุป" in text:
         counts = chat_counter.get(group_id, {"text":0,"image":0})
         total = counts["text"] + counts["image"]
         reply_text = f"✨สรุป จำนวนบิล✨\n\nมีทั้งหมด {total} 📨"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+        print(f"📢 trigger for group {group_id} | counts: {counts}")
+
+        # รีเซ็ตบิลหลังสรุป (ล้าง count แต่เก็บข้อความใหม่ที่จะนับต่อไป)
+        chat_counter[group_id] = {"text":0, "image":0}
+        print(f"Counts reset for group {group_id}")
         return
 
-    # ถ้าเป็นข้อความประกาศ/ข้อความปกติที่ valid → รีเซ็ตบิลใหม่ + เริ่มนับข้อความนี้เป็นบิลแรก
+    # ข้อความปกติที่ valid → เพิ่มเข้า chat_counter
     if is_valid_text(text):
-        chat_counter[group_id] = {"text":1, "image":0}
+        counts = chat_counter.get(group_id, {"text":0,"image":0})
+        counts["text"] += 1
+        chat_counter[group_id] = counts
+
         message_memory[message_id] = {
             "type": "text",
             "user_id": user_id,
@@ -61,6 +65,7 @@ def handle_text_message(event):
             "timestamp": datetime.now(pytz.timezone('Asia/Bangkok')),
             "group_id": group_id
         }
+        print(f"Text counted for group {group_id} | counts: {chat_counter[group_id]}")
 
 # รับภาพ Image
 @handler.add(MessageEvent, message=ImageMessage)
@@ -69,92 +74,30 @@ def handle_image_message(event):
     message_id = event.message.id
     group_id = getattr(event.source, 'group_id', user_id)
 
-    chat_counter.setdefault(group_id, {"text":0,"image":0})
-    chat_counter[group_id]["image"] += 1  # นับภาพปกติ
-
-    image_content = line_bot_api.get_message_content(message_id)
-    image_path = f"temp_{message_id}.jpg"
-    with open(image_path, 'wb') as f:
-        for chunk in image_content.iter_content():
-            f.write(chunk)
+    counts = chat_counter.get(group_id, {"text":0,"image":0})
+    counts["image"] += 1
+    chat_counter[group_id] = counts
 
     message_memory[message_id] = {
         "type": "image",
         "user_id": user_id,
-        "image_path": image_path,
         "timestamp": datetime.now(pytz.timezone('Asia/Bangkok')),
         "group_id": group_id
     }
+    print(f"Image counted for group {group_id} | counts: {counts}")
 
-# ข้ามสติกเกอร์ ไม่นับ
-@handler.add(MessageEvent, message=StickerMessage)
-def handle_sticker_message(event):
-    pass  # ไม่นับสติกเกอร์
-
-# Serve ภาพ
-@app.route('/images/<message_id>.jpg')
-def serve_image(message_id):
-    filepath = f"temp_{message_id}.jpg"
-    if os.path.exists(filepath):
-        return send_file(filepath, mimetype='image/jpeg')
-    return "File not found", 404
-
-# รับ event ยกเลิกข้อความ/ภาพ
-@handler.add(UnsendEvent)
+# ยกเลิกข้อความ/ภาพ
+@handler.add(UnsendMessageEvent)
 def handle_unsend(event):
-    message_id = event.unsend.message_id
-    if message_id not in message_memory:
-        return
+    message_id = event.message_id
+    group_id = getattr(event.source, 'group_id', event.source.user_id)
 
-    data = message_memory[message_id]
-    user_id = data["user_id"]
-    group_id = data["group_id"]
-
-    try:
-        profile = line_bot_api.get_profile(user_id)
-        display_name = profile.display_name
-    except:
-        display_name = "ไม่ทราบชื่อ"
-
-    timestamp = data["timestamp"].strftime("%d/%m/%Y %H:%M")
-
-    if data["type"] == "text":
-        reply_text = (
-            f"[ ข้อความที่ถูกยกเลิก ]\n"
-            f"• ผู้ส่ง : {display_name}\n"
-            f"• เวลาส่ง : {timestamp}\n"
-            f"• ประเภท : ข้อความ\n"
-            f"• ข้อความ : \"{data['text']}\""
-        )
-        line_bot_api.push_message(group_id, TextSendMessage(text=reply_text))
-
-    elif data["type"] == "image":
-        image_url = f"{APP_URL}/images/{message_id}.jpg"
-        reply_text = (
-            f"[ ข้อความที่ถูกยกเลิก ]\n"
-            f"• ผู้ส่ง : {display_name}\n"
-            f"• เวลาส่ง : {timestamp}\n"
-            f"• ประเภท : ภาพ\n"
-            f"• ข้อความ : ”ภาพยกเลิก“"
-        )
-        line_bot_api.push_message(group_id, [
-            TextSendMessage(text=reply_text),
-            ImageSendMessage(original_content_url=image_url, preview_image_url=image_url)
-        ])
-
-    del message_memory[message_id]
-
-# LINE Webhook
-@app.route("/callback", methods=['POST'])
-def callback():
-    signature = request.headers.get('X-Line-Signature', '')
-    body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
-
-# Run Flask App
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+    msg = message_memory.pop(message_id, None)
+    if msg:
+        counts = chat_counter.get(group_id, {"text":0, "image":0})
+        if msg["type"] == "text":
+            counts["text"] = max(counts["text"] - 1, 0)
+        elif msg["type"] == "image":
+            counts["image"] = max(counts["image"] - 1, 0)
+        chat_counter[group_id] = counts
+        print(f"Message unsent in group {group_id} | counts updated: {counts}")
