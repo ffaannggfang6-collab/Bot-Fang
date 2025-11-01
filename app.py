@@ -4,8 +4,6 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.models import TextSendMessage, MessageEvent, TextMessage, ImageMessage, UnsendMessageEvent
 import pytz
 from datetime import datetime
-
-# สำหรับ ngrok
 from pyngrok import ngrok
 
 app = Flask(__name__)
@@ -16,14 +14,12 @@ CHANNEL_SECRET = "YOUR_CHANNEL_SECRET"
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-# ตัวเก็บบิล
 chat_counter = {}      # {group_id: {"text": n, "image": n}}
 message_memory = {}    # เก็บข้อความ + ภาพ
 
 def is_valid_text(text):
     return text.strip() != "" and text != "📢"
 
-# Webhook endpoint
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -34,7 +30,7 @@ def callback():
         print("Error:", e)
     return 'OK'
 
-# รับข้อความ
+# ฟังก์ชันรับข้อความ
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
     text = event.message.text
@@ -42,19 +38,26 @@ def handle_text_message(event):
     group_id = getattr(event.source, 'group_id', user_id)
     message_id = event.message.id
 
-    # 📢 สรุปบิล + รีเซ็ตหลังสรุป
+    # --- 📢 สรุปบิล + debug ---
     if "📢" in text or "สรุป" in text:
         counts = chat_counter.get(group_id, {"text":0,"image":0})
         total = counts["text"] + counts["image"]
-        reply_text = f"✨สรุป จำนวนบิล✨\n\nมีทั้งหมด {total} 📨"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
-        print(f"📢 trigger for group {group_id} | counts: {counts}")
+        print(f"📢 Triggered! Group: {group_id} | Text: {counts['text']} | Image: {counts['image']} | Total: {total}")
 
-        # รีเซ็ตบิลหลังสรุป
+        try:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"✨สรุป จำนวนบิล✨\n\nมีทั้งหมด {total} 📨")
+            )
+        except Exception as e:
+            print(f"Error reply_message: {e}")
+
+        # รีเซ็ต count หลังสรุป
         chat_counter[group_id] = {"text":0, "image":0}
+        print(f"Counts reset for group {group_id}")
         return
 
-    # ข้อความปกติที่ valid → เพิ่ม count
+    # --- ข้อความปกติ ---
     if is_valid_text(text):
         counts = chat_counter.get(group_id, {"text":0,"image":0})
         counts["text"] += 1
@@ -104,15 +107,18 @@ def handle_unsend(event):
         chat_counter[group_id] = counts
         print(f"Message unsent in group {group_id} | counts updated: {counts}")
 
-        # ส่งข้อความแจ้งในกลุ่ม
-        line_bot_api.push_message(
-            group_id,
-            TextSendMessage(
-                text=f"⚠️ มีการยกเลิก {msg['type']} ในกลุ่ม | จำนวนบิลล่าสุด: {counts['text']} ข้อความ, {counts['image']} ภาพ"
+        # แจ้งในกลุ่ม
+        try:
+            line_bot_api.push_message(
+                group_id,
+                TextSendMessage(
+                    text=f"⚠️ มีการยกเลิก {msg['type']} ในกลุ่ม | จำนวนบิลล่าสุด: {counts['text']} ข้อความ, {counts['image']} ภาพ"
+                )
             )
-        )
+        except Exception as e:
+            print(f"Error push_message: {e}")
 
-# เริ่ม ngrok tunnel อัตโนมัติบน port 10000
+# --- เริ่ม ngrok tunnel port 10000 ---
 if __name__ == "__main__":
     public_url = ngrok.connect(10000)
     print(f"Ngrok URL (ใช้เป็น Webhook URL ใน LINE): {public_url}")
