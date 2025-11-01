@@ -5,6 +5,9 @@ from linebot.models import TextSendMessage, MessageEvent, TextMessage, ImageMess
 import pytz
 from datetime import datetime
 
+# สำหรับ ngrok
+from pyngrok import ngrok
+
 app = Flask(__name__)
 
 # LINE Bot Setup
@@ -31,7 +34,7 @@ def callback():
         print("Error:", e)
     return 'OK'
 
-# รับข้อความข้อความ
+# รับข้อความ
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
     text = event.message.text
@@ -39,7 +42,7 @@ def handle_text_message(event):
     group_id = getattr(event.source, 'group_id', user_id)
     message_id = event.message.id
 
-    # 📢 สรุปบิล + รีเซ็ตเฉพาะหลังสรุป
+    # 📢 สรุปบิล + รีเซ็ตหลังสรุป
     if "📢" in text or "สรุป" in text:
         counts = chat_counter.get(group_id, {"text":0,"image":0})
         total = counts["text"] + counts["image"]
@@ -47,12 +50,11 @@ def handle_text_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         print(f"📢 trigger for group {group_id} | counts: {counts}")
 
-        # รีเซ็ตบิลหลังสรุป (ล้าง count แต่เก็บข้อความใหม่ที่จะนับต่อไป)
+        # รีเซ็ตบิลหลังสรุป
         chat_counter[group_id] = {"text":0, "image":0}
-        print(f"Counts reset for group {group_id}")
         return
 
-    # ข้อความปกติที่ valid → เพิ่มเข้า chat_counter
+    # ข้อความปกติที่ valid → เพิ่ม count
     if is_valid_text(text):
         counts = chat_counter.get(group_id, {"text":0,"image":0})
         counts["text"] += 1
@@ -67,7 +69,7 @@ def handle_text_message(event):
         }
         print(f"Text counted for group {group_id} | counts: {chat_counter[group_id]}")
 
-# รับภาพ Image
+# รับภาพ
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image_message(event):
     user_id = event.source.user_id
@@ -86,7 +88,7 @@ def handle_image_message(event):
     }
     print(f"Image counted for group {group_id} | counts: {counts}")
 
-# ยกเลิกข้อความ/ภาพ
+# ยกเลิกข้อความ/ภาพ + แจ้งในกลุ่ม
 @handler.add(UnsendMessageEvent)
 def handle_unsend(event):
     message_id = event.message_id
@@ -101,3 +103,17 @@ def handle_unsend(event):
             counts["image"] = max(counts["image"] - 1, 0)
         chat_counter[group_id] = counts
         print(f"Message unsent in group {group_id} | counts updated: {counts}")
+
+        # ส่งข้อความแจ้งในกลุ่ม
+        line_bot_api.push_message(
+            group_id,
+            TextSendMessage(
+                text=f"⚠️ มีการยกเลิก {msg['type']} ในกลุ่ม | จำนวนบิลล่าสุด: {counts['text']} ข้อความ, {counts['image']} ภาพ"
+            )
+        )
+
+# เริ่ม ngrok tunnel อัตโนมัติบน port 10000
+if __name__ == "__main__":
+    public_url = ngrok.connect(10000)
+    print(f"Ngrok URL (ใช้เป็น Webhook URL ใน LINE): {public_url}")
+    app.run(host="0.0.0.0", port=10000)
